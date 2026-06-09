@@ -1,0 +1,4 @@
+{"type":"user","message":{"role":"user","content":[{"type":"text","text":"please read the config"}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_abc123","name":"Read","input":{"file_path":"/home/user/project/foo.py"}}]}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_abc123","content":[{"type":"text","text":"1\tprint('hello')\n"}]}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_def456","name":"Edit","input":{"file_path":"/home/user/project/bar.py","old_string":"a","new_string":"b"}}]}}

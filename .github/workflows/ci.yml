@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Python
+        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5.3.0
+        with:
+          python-version: "3.12"
+
+      - name: Install tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff mypy pytest
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+
+      - name: Shellcheck (bash hook)
+        run: shellcheck fresh-read-guard.sh
+
+      - name: bash -n syntax gate
+        run: bash -n fresh-read-guard.sh
+
+      - name: ruff (python hook + tests)
+        run: ruff check fresh-read-guard-bash.py tests/
+
+      - name: mypy (python hook)
+        run: mypy fresh-read-guard-bash.py
+
+      - name: py_compile syntax gate
+        run: python -m py_compile fresh-read-guard-bash.py tests/test_hooks.py
+
+      - name: pytest
+        run: pytest tests/ -q
