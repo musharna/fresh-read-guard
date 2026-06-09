@@ -1,5 +1,8 @@
 # fresh-read-guard
 
+[![CI](https://github.com/musharna/fresh-read-guard/actions/workflows/ci.yml/badge.svg)](https://github.com/musharna/fresh-read-guard/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 Two [Claude Code](https://docs.claude.com/en/docs/claude-code) `PreToolUse` hooks that enforce **read-before-write**: an `Edit`, `Write`, or bash-mediated write to a file that hasn't been `Read` in the current session is blocked until you read it.
 
 It's a guardrail for the "**Iron Law of Current State**" — don't mutate a file based on what you _remember_ it contains; read the live bytes first. Editing from a stale mental model (or a post-compaction summary) is how silent corruption and clobbered changes happen.
@@ -30,6 +33,8 @@ Both:
 
 ## Install
 
+> **These are executable hooks** — Claude Code runs them on every matching tool call with your shell's privileges. **Read both scripts before installing**, as you would any script you `curl` into your config. See [SECURITY.md](SECURITY.md) for the threat model (it fails _open_ by design and is not a sandbox).
+
 Copy the two hooks somewhere (e.g. `~/.claude/hooks/`) and make them executable:
 
 ```bash
@@ -39,7 +44,7 @@ curl -fsSL https://raw.githubusercontent.com/musharna/fresh-read-guard/main/fres
 chmod +x ~/.claude/hooks/fresh-read-guard.sh ~/.claude/hooks/fresh-read-guard-bash.py
 ```
 
-Then wire them into `~/.claude/settings.json` (see [`examples/settings.json`](examples/settings.json)):
+Then wire them into `~/.claude/settings.json` (see [`examples/settings.json`](examples/settings.json) and [`examples/README.md`](examples/README.md)). Note: the example JSON can't carry comments — when you genuinely need to write without a prior read, use the [override mechanism](#overriding) (`IRON_LAW_OVERRIDE=1` env, or the inline `# IRON_LAW_OK` token for the Bash hook):
 
 ```json
 {
