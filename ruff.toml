@@ -1,0 +1,25 @@
+# Lint policy is declared here rather than inherited from whatever ruff version
+# CI happens to install that day.
+#
+# ci.yml installs ruff unpinned (`pip install ruff mypy pytest`). This repo was
+# green on 2026-06-09 and went red with no code change, because ruff's DEFAULT
+# rule set later expanded: 0.16.0 flags BLE001 x4 and PIE810 x1 here.
+#
+# Pinning the ruff version alone would only defer that — the next deliberate
+# bump would re-break it. Declaring the selection makes the lint contract
+# explicit and immune to upstream default changes.
+#
+# This is ruff's historical default selection, i.e. exactly the rules this repo
+# was already passing. Verified: with this file, ruff 0.16.0 reports
+# "All checks passed"; without it, exit 1.
+#
+# The BLE001 hits are deliberate. fresh-read-guard-bash.py is a PreToolUse hook
+# — an uncaught exception there would block every edit in the session, so the
+# broad `except Exception:` handlers fail open on purpose. Widen `select` if you
+# want them enforced, but do it as a considered change, not as a side effect of
+# a ruff release.
+
+line-length = 100
+
+[lint]
+select = ["E4", "E7", "E9", "F"]
