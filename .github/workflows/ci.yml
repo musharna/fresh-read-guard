@@ -35,13 +35,13 @@ jobs:
         run: bash -n fresh-read-guard.sh
 
       - name: ruff (python hook + tests)
-        run: ruff check fresh-read-guard-bash.py tests/
+        run: ruff check fresh-read-guard-bash.py fresh_read_check.py tests/
 
-      - name: mypy (python hook)
-        run: mypy fresh-read-guard-bash.py
+      - name: mypy (python hook + predicate)
+        run: mypy fresh-read-guard-bash.py fresh_read_check.py
 
       - name: py_compile syntax gate
-        run: python -m py_compile fresh-read-guard-bash.py tests/test_hooks.py
+        run: python -m py_compile fresh-read-guard-bash.py fresh_read_check.py tests/test_hooks.py tests/test_freshness.py
 
       - name: pytest
         run: pytest tests/ -q

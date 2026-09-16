@@ -29,22 +29,31 @@ AGENT_ID=$(jq -r '.agent_id // empty' <<<"$PAYLOAD")
 [[ "$TOOL" != "Edit" && "$TOOL" != "Write" ]] && exit 0
 [[ ! -e "$FP" ]] && exit 0 # new-file Write — no prior content to read
 
-# Anchored grep needle (anchored on tool name to avoid Edit/Write entry FPs)
-NEEDLE="\"name\":\"Read\",\"input\":{\"file_path\":\"$FP\""
-grep -qF "$NEEDLE" "$TRANSCRIPT" && exit 0
-
-# When invoked from a subagent, also check the issuing subagent's own transcript.
-# Harness passes the parent's transcript_path even from a subagent context, but the
-# subagent's tool calls land in <parent_transcript_without_.jsonl>/subagents/agent-<agent_id>.jsonl.
-# Only the issuing subagent's own transcript is checked (sibling subagents' Reads are not honored).
-if [[ -n "$AGENT_ID" ]]; then
-	SUB_TRANSCRIPT="${TRANSCRIPT%.jsonl}/subagents/agent-${AGENT_ID}.jsonl"
-	[[ -f "$SUB_TRANSCRIPT" ]] && grep -qF "$NEEDLE" "$SUB_TRANSCRIPT" && exit 0
+# Freshness predicate lives in fresh_read_check.py (shared with the Bash hook):
+# the last SUCCESSFUL Read/Edit/Write of $FP (tool_result present, not is_error) must be
+# no older than the file's mtime. A grep for the Read *request* can see neither.
+CHECK="$(dirname "$(readlink -f "$0")")/fresh_read_check.py"
+if [[ ! -f "$CHECK" ]] || ! command -v python3 >/dev/null 2>&1; then
+	echo "fresh-read-guard: $CHECK or python3 missing — guard is NOT enforcing" >&2
+	exit 0
 fi
 
+# When invoked from a subagent, the issuing subagent's own transcript is also consulted:
+# <parent_transcript_without_.jsonl>/subagents/agent-<agent_id>.jsonl (siblings are not).
+SUB_TRANSCRIPT=""
+if [[ -n "$AGENT_ID" ]]; then
+	CAND="${TRANSCRIPT%.jsonl}/subagents/agent-${AGENT_ID}.jsonl"
+	[[ -f "$CAND" ]] && SUB_TRANSCRIPT="$CAND"
+fi
+
+if REASON=$(python3 "$CHECK" "$FP" "$TRANSCRIPT" "$SUB_TRANSCRIPT"); then
+	exit 0
+fi
+[[ -z "$REASON" ]] && exit 0 # predicate errored internally → safe-fail
+REASON="$REASON Override: IRON_LAW_OVERRIDE=1"
+
 # Block: belt-and-suspenders (both deny channels)
-cat <<JSON
-{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Iron Law: Read $FP before editing it. Override: IRON_LAW_OVERRIDE=1"}}
-JSON
-echo "Iron Law: Read $FP before editing it. (override: IRON_LAW_OVERRIDE=1)" >&2
+jq -cn --arg r "$REASON" \
+	'{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}'
+echo "$REASON" >&2
 exit 2

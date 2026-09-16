@@ -29,6 +29,17 @@ import re
 import sys
 from pathlib import Path
 
+# Shared freshness predicate — installed alongside this hook (same directory).
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+try:
+    from fresh_read_check import check
+except ImportError:  # pragma: no cover — safe-fail, but say so
+    print(
+        "fresh-read-guard-bash: fresh_read_check.py missing — guard is NOT enforcing",
+        file=sys.stderr,
+    )
+    sys.exit(0)
+
 OVERRIDE_TOKEN = "# IRON_LAW_OK"
 SKIP_PREFIXES = ("/dev/", "/proc/", "/sys/", "/tmp/", "/var/tmp/", "/run/")
 
@@ -169,19 +180,11 @@ def main() -> None:
     if not raw_targets:
         sys.exit(0)
 
-    try:
-        tr_content = Path(transcript).read_text(errors="replace")
-    except Exception:
-        sys.exit(0)
-    sub_content = ""
-    if sub_transcript:
-        try:
-            sub_content = Path(sub_transcript).read_text(errors="replace")
-        except Exception:
-            sub_content = ""
+    transcripts = [transcript] + ([sub_transcript] if sub_transcript else [])
 
     seen: set[str] = set()
     unread: list[str] = []
+    reasons: list[str] = []
     for raw in raw_targets:
         fp = resolve_path(raw, cwd)
         if not fp or fp in seen:
@@ -192,12 +195,14 @@ def main() -> None:
         # New-file writes are allowed (mirrors Edit|Write guard's `[[ ! -e "$FP" ]] && exit 0`).
         if not Path(fp).exists():
             continue
-        needle = f'"name":"Read","input":{{"file_path":"{fp}"'
-        if needle in tr_content:
-            continue
-        if sub_content and needle in sub_content:
+        try:
+            ok, why = check(fp, transcripts)
+        except Exception:
+            continue  # a broken predicate must not block
+        if ok:
             continue
         unread.append(fp)
+        reasons.append(why)
 
     if not unread:
         sys.exit(0)
@@ -205,9 +210,10 @@ def main() -> None:
     preview = ", ".join(unread[:5])
     if len(unread) > 5:
         preview += f" (+{len(unread) - 5} more)"
+    detail = " | ".join(reasons[:5])
     reason = (
-        f"Iron Law: Bash command would write to {preview} without a prior Read in this session. "
-        f"Read the file(s) first. Override: env IRON_LAW_OVERRIDE=1, or inline token '{OVERRIDE_TOKEN}'."
+        f"Iron Law: Bash command would write to {preview}. {detail} "
+        f"Override: env IRON_LAW_OVERRIDE=1, or inline token '{OVERRIDE_TOKEN}'."
     )
     emit_block(reason)
 
