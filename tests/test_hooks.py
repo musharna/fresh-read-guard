@@ -14,6 +14,7 @@ Covers two load-bearing assumptions:
 from __future__ import annotations
 
 import importlib.util
+import os
 from pathlib import Path
 
 import pytest
@@ -24,7 +25,10 @@ FIXTURE = REPO_ROOT / "tests" / "fixtures" / "transcript.jsonl"
 
 def _load_bash_hook():
     """Import fresh-read-guard-bash.py (hyphenated name) as a module."""
-    path = REPO_ROOT / "fresh-read-guard-bash.py"
+    # FRESH_READ_GUARD_BASH lets the suite run against a different copy of
+    # the hook (e.g. `git show <ref>:fresh-read-guard-bash.py > /tmp/old.py`)
+    # to see a new test FAIL on the code it was written against.
+    path = Path(os.environ.get("FRESH_READ_GUARD_BASH") or REPO_ROOT / "fresh-read-guard-bash.py")
     spec = importlib.util.spec_from_file_location("fresh_read_guard_bash", path)
     assert spec is not None and spec.loader is not None
     mod = importlib.util.module_from_spec(spec)
@@ -219,3 +223,77 @@ def test_skip_prefix_tmp_extracted_but_filtered_downstream():
     assert "/tmp/" in hook.SKIP_PREFIXES
     got = hook.find_write_targets("echo hi > /tmp/x")
     assert "/tmp/x" in got  # extracted here; main() drops it via SKIP_PREFIXES
+
+
+# ---------------------------------------------------------------------------
+# 3. Ported fork behaviours: telling code from data, and cwd resolution.
+# ---------------------------------------------------------------------------
+#
+# Each test pairs the negative (this is NOT a write) with a positive control
+# (this IS one) so a harness that extracts nothing cannot read as a pass.
+
+
+def test_ge_comparison_is_not_a_redirect():
+    """`n >= 0` is a comparison; `n > 0.txt` (same shape, no `=`) is a redirect."""
+    assert hook.find_write_targets("[[ $n >= 0 ]] && echo ok") == []
+    assert hook.find_write_targets("python3 -c 'print(1 >= 0)'") == []
+    got = hook.find_write_targets("echo x > /home/user/project/0.txt")
+    assert got == ["/home/user/project/0.txt"]
+
+
+def test_effective_cwd_reads_literal_leading_cd_only():
+    """`cd /a && echo x > rel.txt` resolves against /a; `cd "$D" && ...` is not determinable."""
+    cwd, ok = hook.effective_cwd("cd /a && echo x > rel.txt", "/session")
+    assert (cwd, ok) == ("/a", True)
+    assert hook.resolve_path("rel.txt", cwd) == "/a/rel.txt"
+    cwd, ok = hook.effective_cwd('cd "$D" && echo x > rel.txt', "/session")
+    assert ok is False
+    # A cd past the leading prefix (after a pipe / inside the command) is out of reach.
+    cwd, ok = hook.effective_cwd("echo x | (cd /b && cat > rel.txt)", "/session")
+    assert (cwd, ok) == ("/session", False)
+    # No cd at all: session cwd, determinable.
+    assert hook.effective_cwd("echo x > rel.txt", "/session") == ("/session", True)
+    # Relative and chained cds compose.
+    assert hook.effective_cwd("cd a; cd b && echo x > f", "/s") == ("/s/a/b", True)
+
+
+def test_data_heredoc_body_is_not_a_write():
+    """`cat > f <<EOT ... >x ... EOT` writes only f; the `>x` in the body is data."""
+    cmd = "cat > /home/user/project/f <<EOT\necho hi > /home/user/project/x\nEOT"
+    got = hook.find_write_targets(cmd)
+    assert got == ["/home/user/project/f"]
+    # `.sh` in the target must not read as the `sh` interpreter (extension != command).
+    cmd = "cat > /home/user/project/t.sh <<'EOT'\necho hi > /home/user/project/x\nEOT"
+    assert hook.find_write_targets(cmd) == ["/home/user/project/t.sh"]
+    # tee-fed heredoc likewise.
+    cmd = "tee /home/user/project/f <<EOT\nopen('/home/user/project/x', 'w')\nEOT"
+    assert hook.find_write_targets(cmd) == ["/home/user/project/f"]
+
+
+def test_interpreter_fed_heredoc_stays_in_scope():
+    """`python3 - <<PY open('g','w') PY` executes its body, so g IS a write target."""
+    cmd = "python3 - <<PY\nopen('/home/user/project/g', 'w').write('x')\nPY"
+    assert hook.find_write_targets(cmd) == ["/home/user/project/g"]
+    cmd = "cd /x && python3 - <<'PY'\nopen('/home/user/project/g', 'w')\nPY"
+    assert "/home/user/project/g" in hook.find_write_targets(cmd)
+    cmd = "bash <<'SH'\necho x > /home/user/project/g\nSH"
+    assert "/home/user/project/g" in hook.find_write_targets(cmd)
+    # Negative control: the same body fed to cat is data.
+    cmd = "cat <<PY\nopen('/home/user/project/g', 'w').write('x')\nPY"
+    assert hook.find_write_targets(cmd) == []
+
+
+def test_quoted_gt_is_not_a_redirect_unless_handed_to_a_shell():
+    """`git commit -m 'a > b'` yields nothing; `bash -c "echo x > f"` yields f."""
+    assert hook.find_write_targets("git commit -m 'a > b'") == []
+    assert hook.find_write_targets('git commit -m "fix: a > /home/user/project/b"') == []
+    assert hook.find_write_targets('bash -c "echo x > /home/user/project/f"') == [
+        "/home/user/project/f"
+    ]
+    assert hook.find_write_targets("sh -c 'echo x > /home/user/project/f'") == [
+        "/home/user/project/f"
+    ]
+    # Unquoted redirect beside a quoted `>` is still live.
+    assert hook.find_write_targets("echo 'a > b' > /home/user/project/f") == [
+        "/home/user/project/f"
+    ]
